@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/miekg/dns"
 )
@@ -45,6 +46,18 @@ func NewDNS(conn net.PacketConn, handler DNSHandler, upstream string) (*DNS, err
 
 	mux.Handle(".", d)
 
+	fmt.Println("setting tsig secret")
+	d.server.TsigSecret = map[string]string{"axfr.": "Zm9vCg=="}
+
+	d.server.MsgAcceptFunc = func(h dns.Header) dns.MsgAcceptAction {
+		fmt.Printf("h: %#v\n", h)
+		x := dns.DefaultMsgAcceptFunc(h)
+		fmt.Printf("x: %+v\n", x)
+		fmt.Printf("dns.MsgAccept: %+v\n", dns.MsgAccept)
+		fmt.Printf("dns.MsgReject: %+v\n", dns.MsgReject)
+		return dns.MsgAccept
+	}
+
 	return d, nil
 }
 
@@ -61,6 +74,8 @@ func (d *DNS) Shutdown(ctx context.Context) error {
 }
 
 func (d *DNS) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
+	fmt.Printf("r: %+v\n", r)
+
 	if len(r.Question) < 1 {
 		dnsError(w, r, fmt.Errorf("invalid question"))
 		return
@@ -82,6 +97,25 @@ func (d *DNS) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	a.SetReply(r)
+
+	if r.Opcode == dns.OpcodeUpdate && r.IsTsig() != nil && w.TsigStatus() == nil {
+		for _, ns := range r.Ns {
+			fmt.Printf("ns: %+v\n", ns)
+			if txt, ok := ns.(*dns.TXT); ok {
+				fmt.Printf("txt: %#v\n", txt)
+				switch txt.Header().Class {
+				case dns.ClassINET:
+					name := txt.Header().Name
+					vals := txt.Txt
+					fmt.Printf("name: %+v\n", name)
+					fmt.Printf("vals: %+v\n", vals)
+				}
+			}
+		}
+		a.SetTsig("axfr.", dns.HmacMD5, 300, time.Now().Unix())
+		w.WriteMsg(a)
+		return
+	}
 
 	if answer, ok := d.handler(typ, question); ok {
 		fmt.Printf("ns=dns at=answer type=%s question=%q answer=%q\n", typ, question, answer)

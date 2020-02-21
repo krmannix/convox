@@ -21,3 +21,31 @@ module "k8s" {
   rack      = var.rack
   release   = var.release
 }
+
+resource "kubernetes_service" "resolver-external" {
+  metadata {
+    namespace = var.namespace
+    name      = "resolver-external"
+
+    annotations = {
+      "service.beta.kubernetes.io/aws-load-balancer-type" : "nlb"
+    }
+  }
+
+  spec {
+    type = "LoadBalancer"
+
+    port {
+      name        = "dns"
+      port        = 53
+      protocol    = "UDP"
+      target_port = 5453
+    }
+
+    selector = module.k8s.selector
+  }
+
+  lifecycle {
+    ignore_changes = [metadata[0].annotations]
+  }
+}
