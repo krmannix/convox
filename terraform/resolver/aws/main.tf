@@ -33,11 +33,10 @@ resource "kubernetes_service" "resolver-external" {
   }
 
   spec {
-    type = "LoadBalancer"
+    type = "NodePort"
 
     port {
       name        = "dns"
-      port        = 53
       protocol    = "UDP"
       target_port = 5453
     }
