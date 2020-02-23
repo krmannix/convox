@@ -26,10 +26,6 @@ resource "kubernetes_service" "resolver-external" {
   metadata {
     namespace = var.namespace
     name      = "resolver-external"
-
-    annotations = {
-      "service.beta.kubernetes.io/aws-load-balancer-type" : "nlb"
-    }
   }
 
   spec {
@@ -37,6 +33,7 @@ resource "kubernetes_service" "resolver-external" {
 
     port {
       name        = "dns"
+      port        = 54533
       protocol    = "UDP"
       target_port = 5453
     }
