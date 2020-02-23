@@ -23,6 +23,11 @@ output "oidc_sub" {
   value      = local.oidc_sub
 }
 
+output "resolver_target" {
+  depends_on = [aws_lb_target_group.resolver]
+  value      = aws_lb_target_group.resolver.arn
+}
+
 output "subnets" {
   value = aws_subnet.private.*.id
 }

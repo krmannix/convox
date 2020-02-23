@@ -19,6 +19,7 @@ const (
 type Resolver struct {
 	dnsExternal    *DNS
 	dnsInternal    *DNS
+	health         *Health
 	ingress        *Ingress
 	kubernetes     *kubernetes.Clientset
 	namespace      string
@@ -47,6 +48,10 @@ func New(namespace string) (*Resolver, error) {
 		return nil, err
 	}
 
+	if err := r.setupHealth(); err != nil {
+		return nil, err
+	}
+
 	if err := r.setupIngress(); err != nil {
 		return nil, err
 	}
@@ -67,6 +72,7 @@ func (r *Resolver) Serve() error {
 
 	go serve(ch, r.dnsExternal)
 	go serve(ch, r.dnsInternal)
+	go serve(ch, r.health)
 
 	go r.ingress.Start()
 	go r.service.Start()
@@ -77,6 +83,7 @@ func (r *Resolver) Serve() error {
 func (r *Resolver) Shutdown(ctx context.Context) error {
 	_ = r.dnsExternal.Shutdown(ctx)
 	_ = r.dnsInternal.Shutdown(ctx)
+	_ = r.health.Shutdown(ctx)
 
 	r.ingress.Stop()
 	r.service.Stop()
@@ -106,6 +113,14 @@ func (r *Resolver) resolve(typ, host, router string) (string, bool) {
 		}
 	}
 
+	return "", false
+}
+
+func (r *Resolver) resolveExternal(typ, host string) (string, bool) {
+	return r.resolve(typ, host, r.routerExternal)
+}
+
+func (r *Resolver) resolveInternal(typ, host string) (string, bool) {
 	if ip, ok := r.service.IP(host); ok {
 		switch typ {
 		case "A":
@@ -115,14 +130,6 @@ func (r *Resolver) resolve(typ, host, router string) (string, bool) {
 		}
 	}
 
-	return "", false
-}
-
-func (r *Resolver) resolveExternal(typ, host string) (string, bool) {
-	return r.resolve(typ, host, r.routerExternal)
-}
-
-func (r *Resolver) resolveInternal(typ, host string) (string, bool) {
 	return r.resolve(typ, host, r.routerInternal)
 }
 
@@ -152,6 +159,17 @@ func (r *Resolver) setupDNS() error {
 	}
 
 	r.dnsInternal = di
+
+	return nil
+}
+
+func (r *Resolver) setupHealth() error {
+	h, err := NewHealth(":5452")
+	if err != nil {
+		return err
+	}
+
+	r.health = h
 
 	return nil
 }
