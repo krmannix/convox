@@ -11,30 +11,30 @@ import (
 )
 
 type DNS struct {
-	client   dns.Client
-	handler  DNSHandler
-	mux      *dns.ServeMux
-	server   *dns.Server
-	soa      dns.RR
-	upstream string
+	Resolver DNSResolver
+	Updater  DNSUpdater
+	Upstream string
+
+	addr   string
+	client dns.Client
+	proto  string
+	server *dns.Server
+	soa    dns.RR
 }
 
-type DNSHandler func(typ, host string) (string, bool)
+type DNSResolver func(typ, host string) ([]string, bool)
+type DNSUpdater func(typ, host string, values []string) error
 
-func NewDNS(conn net.PacketConn, handler DNSHandler, upstream string) (*DNS, error) {
+func NewDNS(proto, addr string) (*DNS, error) {
 	mux := dns.NewServeMux()
 
-	fmt.Printf("ns=dns at=new upstream=%s\n", upstream)
+	fmt.Printf("ns=dns at=new proto=%s addr=%s\n", proto, addr)
 
 	d := &DNS{
-		client:  dns.Client{Net: "udp"},
-		handler: handler,
-		mux:     mux,
-		server: &dns.Server{
-			PacketConn: conn,
-			Handler:    mux,
-		},
-		upstream: upstream,
+		addr:   addr,
+		client: dns.Client{Net: "udp"},
+		proto:  proto,
+		server: &dns.Server{Handler: mux},
 	}
 
 	soa, err := dns.NewRR("$ORIGIN .\n$TTL 0\n@ SOA ns.convox. support.convox.com. 2020010100 0 0 0 0")
@@ -50,11 +50,7 @@ func NewDNS(conn net.PacketConn, handler DNSHandler, upstream string) (*DNS, err
 	d.server.TsigSecret = map[string]string{"axfr.": "Zm9vCg=="}
 
 	d.server.MsgAcceptFunc = func(h dns.Header) dns.MsgAcceptAction {
-		fmt.Printf("h: %#v\n", h)
-		x := dns.DefaultMsgAcceptFunc(h)
-		fmt.Printf("x: %+v\n", x)
-		fmt.Printf("dns.MsgAccept: %+v\n", dns.MsgAccept)
-		fmt.Printf("dns.MsgReject: %+v\n", dns.MsgReject)
+		// x := dns.DefaultMsgAcceptFunc(h)
 		return dns.MsgAccept
 	}
 
@@ -64,17 +60,32 @@ func NewDNS(conn net.PacketConn, handler DNSHandler, upstream string) (*DNS, err
 func (d *DNS) ListenAndServe() error {
 	fmt.Printf("ns=dns at=serve\n")
 
+	conn, err := net.ListenPacket(d.proto, d.addr)
+	if err != nil {
+		return err
+	}
+
+	d.server.PacketConn = conn
+
 	return d.server.ActivateAndServe()
 }
 
 func (d *DNS) Shutdown(ctx context.Context) error {
 	fmt.Printf("ns=dns at=shutdown\n")
 
-	return d.server.Shutdown()
+	if err := d.server.Shutdown(); err != nil {
+		return err
+	}
+
+	if err := d.server.PacketConn.Close(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (d *DNS) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
-	fmt.Printf("r: %+v\n", r)
+	// fmt.Printf("r: %+v\n", r)
 
 	if len(r.Question) < 1 {
 		dnsError(w, r, fmt.Errorf("invalid question"))
@@ -98,54 +109,74 @@ func (d *DNS) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 	a.SetReply(r)
 
-	if r.Opcode == dns.OpcodeUpdate && r.IsTsig() != nil && w.TsigStatus() == nil {
-		for _, ns := range r.Ns {
-			fmt.Printf("ns: %+v\n", ns)
-			if txt, ok := ns.(*dns.TXT); ok {
-				fmt.Printf("txt: %#v\n", txt)
-				switch txt.Header().Class {
-				case dns.ClassINET:
-					name := txt.Header().Name
-					vals := txt.Txt
-					fmt.Printf("name: %+v\n", name)
-					fmt.Printf("vals: %+v\n", vals)
+	if d.Updater != nil {
+		if r.Opcode == dns.OpcodeUpdate && r.IsTsig() != nil && w.TsigStatus() == nil {
+			for _, ns := range r.Ns {
+				fmt.Printf("ns: %+v\n", ns)
+				if txt, ok := ns.(*dns.TXT); ok {
+					fmt.Printf("txt: %#v\n", txt)
+					switch txt.Header().Class {
+					case dns.ClassINET:
+						name := txt.Header().Name
+						vals := txt.Txt
+
+						fmt.Printf("name: %+v\n", name)
+						fmt.Printf("vals: %+v\n", vals)
+
+						if err := d.Updater("TXT", name, vals); err != nil {
+							dnsError(w, r, err)
+							return
+						}
+					}
 				}
 			}
+			a.SetTsig("axfr.", dns.HmacMD5, 300, time.Now().Unix())
+			w.WriteMsg(a)
+			return
 		}
-		a.SetTsig("axfr.", dns.HmacMD5, 300, time.Now().Unix())
-		w.WriteMsg(a)
-		return
 	}
 
-	if answer, ok := d.handler(typ, question); ok {
-		fmt.Printf("ns=dns at=answer type=%s question=%q answer=%q\n", typ, question, answer)
+	if d.Resolver != nil {
+		if answer, ok := d.Resolver(typ, question); ok {
+			fmt.Printf("ns=dns at=resolver type=%s question=%q answer=%v\n", typ, question, answer)
 
-		if answer != "" {
-			rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", question, typ, answer))
-			if err != nil {
-				dnsError(w, r, err)
-				return
-			}
-
-			a.Answer = append(a.Answer, rr)
 			a.Authoritative = true
 			a.Ns = []dns.RR{d.soa}
+
+			switch typ {
+			// case "SOA":
+			// 	a.Answer = append(a.Answer, d.soa)
+			default:
+				for _, value := range answer {
+					rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", question, typ, value))
+					if err != nil {
+						dnsError(w, r, err)
+						return
+					}
+
+					rr.Header().Ttl = 60
+
+					a.Answer = append(a.Answer, rr)
+				}
+			}
+
+			w.WriteMsg(a)
+
+			return
+		}
+	}
+
+	if d.Upstream != "" {
+		fmt.Printf("ns=dns at=forward type=%s question=%q\n", typ, question)
+
+		rs, _, err := d.client.Exchange(r, d.Upstream)
+		if err != nil {
+			dnsError(w, r, err)
+			return
 		}
 
-		w.WriteMsg(a)
-
-		return
+		w.WriteMsg(rs)
 	}
-
-	fmt.Printf("ns=dns at=forward type=%s question=%q\n", typ, question)
-
-	rs, _, err := d.client.Exchange(r, d.upstream)
-	if err != nil {
-		dnsError(w, r, err)
-		return
-	}
-
-	w.WriteMsg(rs)
 }
 
 func dnsError(w dns.ResponseWriter, r *dns.Msg, err error) {

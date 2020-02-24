@@ -150,7 +150,7 @@ func (p *Provider) WithContext(ctx context.Context) structs.Provider {
 }
 
 func (p *Provider) applySystemTemplate(name string, params map[string]interface{}) error {
-	data, err := p.RenderTemplate(fmt.Sprintf("system/%s", name), nil)
+	data, err := p.RenderTemplate(fmt.Sprintf("system/%s", name), params)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -209,7 +209,11 @@ func (p *Provider) initializeTemplates() error {
 	}
 
 	if p.CertManager {
-		if err := p.applySystemTemplate("cert-manager", nil); err != nil {
+		params := map[string]interface{}{
+			"Resolver": p.Resolver,
+		}
+
+		if err := p.applySystemTemplate("cert-manager", params); err != nil {
 			return errors.WithStack(err)
 		}
 
@@ -241,7 +245,11 @@ func (p *Provider) installCertManagerConfig() {
 				if c.Type == "Available" && c.Status == "True" {
 					fmt.Printf("installing cert manager config\n")
 
-					if err := p.applySystemTemplate("cert-manager-config", nil); err != nil {
+					params := map[string]interface{}{
+						"Resolver": p.Resolver,
+					}
+
+					if err := p.applySystemTemplate("cert-manager-config", params); err != nil {
 						fmt.Printf("could not install cert manager config: %s\n", err)
 						break
 					}
