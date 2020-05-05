@@ -5,12 +5,12 @@ data "aws_iam_policy_document" "assume_autoscaler" {
 
     condition {
       test     = "StringEquals"
-      variable = local.oidc_sub
+      variable = module.cluster.oidc_sub
       values   = ["system:serviceaccount:kube-system:cluster-autoscaler"]
     }
 
     principals {
-      identifiers = [aws_iam_openid_connect_provider.cluster.arn]
+      identifiers = [module.cluster.oidc_arn]
       type        = "Federated"
     }
   }
@@ -20,7 +20,6 @@ resource "aws_iam_role" "autoscaler" {
   name               = "${var.name}-autoscaler"
   assume_role_policy = data.aws_iam_policy_document.assume_autoscaler.json
   path               = "/convox/"
-  tags               = local.tags
 }
 
 data "aws_iam_policy_document" "autoscale" {
@@ -261,7 +260,7 @@ resource "kubernetes_deployment" "autoscaler" {
             "--cloud-provider=aws",
             "--skip-nodes-with-local-storage=false",
             "--expander=least-waste",
-            "--node-group-auto-discovery=asg:tag=k8s.io/cluster-autoscaler/enabled,k8s.io/cluster-autoscaler/${aws_eks_cluster.cluster.name}",
+            "--node-group-auto-discovery=asg:tag=k8s.io/cluster-autoscaler/enabled,k8s.io/cluster-autoscaler/${module.cluster.id}",
             "--balance-similar-node-groups",
             "--skip-nodes-with-system-pods=false",
           ]

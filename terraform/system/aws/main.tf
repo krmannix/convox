@@ -17,7 +17,7 @@ provider "kubernetes" {
 
   cluster_ca_certificate = module.cluster.ca
   host                   = module.cluster.endpoint
-  token                  = data.aws_eks_cluster_auth.cluster.token
+  token                  = module.cluster.token
 
   load_config_file = false
 }

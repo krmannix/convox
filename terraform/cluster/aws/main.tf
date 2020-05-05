@@ -2,8 +2,24 @@ terraform {
   required_version = ">= 0.12.0"
 }
 
+data "aws_eks_cluster_auth" "cluster" {
+  name = aws_eks_cluster.cluster.id
+}
+
 provider "aws" {
   version = "~> 2.49"
+}
+
+provider "kubernetes" {
+  version = "~> 1.10.0"
+
+  alias = "direct"
+
+  cluster_ca_certificate = base64decode(aws_eks_cluster.cluster.certificate_authority.0.data)
+  host                   = aws_eks_cluster.cluster.endpoint
+  token                  = data.aws_eks_cluster_auth.cluster.token
+
+  load_config_file = false
 }
 
 provider "local" {

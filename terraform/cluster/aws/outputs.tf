@@ -26,3 +26,7 @@ output "oidc_sub" {
 output "subnets" {
   value = aws_subnet.private.*.id
 }
+
+output "token" {
+  value = data.kubernetes_secret.system.data.token
+}
