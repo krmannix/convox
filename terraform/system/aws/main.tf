@@ -22,10 +22,6 @@ provider "kubernetes" {
   load_config_file = false
 }
 
-data "aws_eks_cluster_auth" "cluster" {
-  name = module.cluster.id
-}
-
 data "http" "releases" {
   url = "https://api.github.com/repos/convox/convox/releases/latest"
 }
